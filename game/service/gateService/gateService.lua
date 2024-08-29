@@ -1,8 +1,28 @@
 local skynet = require "skynet"
 local socket = require "skynet.socket"
+local pb = require "pb"
+local protoc = require "protoc"
+
+require("stringEx")
+require("log")
 
 local clients = {}
 local CMD = {}
+
+assert(protoc:load [[
+   message Phone {
+      optional string name        = 1;
+      optional int64  phonenumber = 2;
+   }
+   message Person {
+      optional string name     = 1;
+      optional int32  age      = 2;
+      optional string address  = 3;
+      repeated Phone  contacts = 4;
+   } ]])
+
+
+print(_VERSION)
 
 skynet.register_protocol {
     name = "client",
@@ -28,8 +48,8 @@ local function decodeMsg(msg)
     --- 前两个字节在netpack.filter 已经解析
     print("msg size:", #msg)
     local proto_name,stringbuffer = string.unpack(">s2s",msg)
-    -- local body = protobuf.decode(proto_name, stringbuffer)
-    return proto_name
+    local body = pb.decode(proto_name, stringbuffer)
+    return proto_name, body
 end
 
 local function connect(fd, addr)
@@ -44,8 +64,9 @@ local function connect(fd, addr)
 		if readdata ~= nil then
 			print(fd .. " recv " .. readdata)
             local data, last = unpack_package(readdata)
-            print(fd .. " proto_name " .. decodeMsg(data))
-
+            local proto_name, body = decodeMsg(data)
+            print(fd .. " proto_name " .. proto_name)
+            print(fd .. " body " .. GetDumpStr(body))
             --socket.write(fd,readdata)
 		else 
 			print(fd .. " close ")
