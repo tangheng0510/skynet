@@ -163,6 +163,13 @@ skynet_socket_start(struct skynet_context *ctx, int id) {
 }
 
 void
+skynet_socket_pause(struct skynet_context *ctx, int id) {
+	uint32_t source = skynet_context_handle(ctx);
+	socket_server_pause(SOCKET_SERVER, source, id);
+}
+
+
+void
 skynet_socket_nodelay(struct skynet_context *ctx, int id) {
 	socket_server_nodelay(SOCKET_SERVER, id);
 }
@@ -171,6 +178,18 @@ int
 skynet_socket_udp(struct skynet_context *ctx, const char * addr, int port) {
 	uint32_t source = skynet_context_handle(ctx);
 	return socket_server_udp(SOCKET_SERVER, source, addr, port);
+}
+
+int
+skynet_socket_udp_dial(struct skynet_context *ctx, const char * addr, int port){
+	uint32_t source = skynet_context_handle(ctx);
+	return socket_server_udp_dial(SOCKET_SERVER, source, addr, port);
+}
+
+int
+skynet_socket_udp_listen(struct skynet_context *ctx, const char * addr, int port){
+	uint32_t source = skynet_context_handle(ctx);
+	return socket_server_udp_listen(SOCKET_SERVER, source, addr, port);
 }
 
 int 

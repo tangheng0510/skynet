@@ -1,3 +1,43 @@
+v1.7.0 (2023-11-13)
+-----------
+* Update Lua to 5.4.6
+* Update lpeg to 1.1.0
+* Improve mongo driver
+* Fix service session rewind issue
+* Add websocket.is_closed
+
+v1.6.0 (2022-11-16)
+-----------
+* Update Lua to 5.4.4 (github Nov 8, 2022)
+* Update jemalloc to 5.3.0
+* Update lpeg to 1.0.2 (For sproto)
+* Update mongo driver to support the newest wire protocol
+* socket.listen()/cluster.open() returns ip address and port
+* Add service.close()
+
+v1.5.0 (2021-11-9)
+-----------
+* Update Lua to 5.4.3
+* Fix socket half close issues
+* Fix TLS issues
+* Improve websocket support
+* Improve redis support
+* Rework skynet.init/skynet.require
+* Add socket.onclose
+* Add httpc.request_stream
+
+v1.4.0 (2020-11-16)
+-----------
+* Update Lua to 5.4.2
+* Add skynet.select
+* Improve mysql driver (@zero-rp @xiaojin @yxt945)
+* Improve websocket and ssl (@lvzixun)
+* Improve sproto (double @lvzixun map @t0350)
+* Add padding mode PKCS7 for DES
+* Add jmem in debug console
+* Add skynet_socket_pause for net traffic control
+* Add timestamp to default logger
+
 v1.3.0 (2019-11-19)
 -----------
 * Improve mysql driver (@yxt945)
@@ -312,7 +352,7 @@ v0.6.0 (2014-8-18)
 * add sharedata
 * bugfix: service exit before init would not report back
 * add skynet.response and check multicall skynet.ret
-* skynet.newservice throw error when lanuch faild
+* skynet.newservice throw error when lanuch failed
 * Don't check imported function in snax.hotfix
 * snax service add change SERVICE_PATH and add it to package.path
 * skynet.redirect support string address

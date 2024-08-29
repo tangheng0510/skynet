@@ -9,6 +9,16 @@ local socket_error = sockethelper.socket_error
 local GLOBAL_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 local MAX_FRAME_SIZE = 256 * 1024 -- max frame is 256K
 
+local assert = assert
+local pairs = pairs
+local error = error
+local string = string
+local xpcall = xpcall
+local pcall = pcall
+local debug = debug
+local table = table
+local tonumber = tonumber
+
 local M = {}
 
 
@@ -24,6 +34,27 @@ local function _isws_closed(id)
     return not ws_pool[id]
 end
 
+local function reader_with_payload(self, payload)
+    local sz_payload = #payload
+    if sz_payload == 0 then
+        return
+    end
+    local read = self.read
+    function self.read (sz)
+        if sz == nil or sz == sz_payload then
+            self.read = read
+            return payload
+        end
+        if sz < sz_payload then
+            local ret = payload:sub(1, sz)
+            payload = payload:sub(sz + 1)
+            sz_payload = #payload
+            return ret
+        end
+        self.read = read
+        return payload .. read(sz - sz_payload)
+    end
+end
 
 local function write_handshake(self, host, url, header)
     local key = crypt.base64encode(crypt.randomkey()..crypt.randomkey())
@@ -41,10 +72,11 @@ local function write_handshake(self, host, url, header)
     end
 
     local recvheader = {}
-    local code, body = internal.request(self, "GET", host, url, recvheader, request_header)
+    local code, payload = internal.request(self, "GET", host, url, recvheader, request_header)
     if code ~= 101 then
-        error(string.format("websocket handshake error: code[%s] info:%s", code, body))    
+        error(string.format("websocket handshake error: code[%s] info:%s", code, payload))
     end
+    reader_with_payload(self, payload)
 
     if not recvheader["upgrade"] or recvheader["upgrade"]:lower() ~= "websocket" then
         error("websocket handshake upgrade must websocket")
@@ -66,27 +98,33 @@ local function write_handshake(self, host, url, header)
     end
 end
 
+local function read_handshake(self, upgrade_ops)
+    local header, method, url
+    if upgrade_ops then
+        header, method, url = upgrade_ops.header, upgrade_ops.method, upgrade_ops.url
+    else
+        local tmpline = {}
+        local payload = internal.recvheader(self.read, tmpline, "")
+        if not payload then
+            return 413
+        end
+        reader_with_payload(self, payload)
 
-local function read_handshake(self)
-    local tmpline = {}
-    local header_body = internal.recvheader(self.read, tmpline, "")
-    if not header_body then
-        return 413
+        local request = assert(tmpline[1])
+        local httpver
+        method, url, httpver = request:match "^(%a+)%s+(.-)%s+HTTP/([%d%.]+)$"
+        assert(method and url and httpver)
+        if method ~= "GET" then
+            return 400, "need GET method"
+        end
+
+        httpver = assert(tonumber(httpver))
+        if httpver < 1.1 then
+            return 505  -- HTTP Version not supported
+        end
+        header = internal.parseheader(tmpline, 2, {})
     end
 
-    local request = assert(tmpline[1])
-    local method, url, httpver = request:match "^(%a+)%s+(.-)%s+HTTP/([%d%.]+)$"
-    assert(method and url and httpver)
-    if method ~= "GET" then
-        return 400, "need GET method"
-    end
-
-    httpver = assert(tonumber(httpver))
-    if httpver < 1.1 then
-        return 505  -- HTTP Version not supported
-    end
-
-    local header = internal.parseheader(tmpline, 2, {})
     if not header then
         return 400  -- Bad request
     end
@@ -131,6 +169,9 @@ local function read_handshake(self)
             return 400, "Sec-WebSocket-Protocol need include chat"
         end
     end
+
+    -- read 'x-real-ip' header from nginx
+    self.real_ip = header["x-real-ip"]
 
     -- response handshake
     local accept = crypt.base64encode(crypt.sha1(sw_key .. self.guid))
@@ -177,7 +218,7 @@ local function write_frame(self, op, payload_data, masking_key)
     -- mask set to 0
     if payload_len < 126 then
         s = string.pack("I1I1", v1, mask | payload_len)
-    elseif payload_len < 0xffff then
+    elseif payload_len <= 0xffff then
         s = string.pack("I1I1>I2", v1, mask | 126, payload_len)
     else
         s = string.pack("I1I1>I8", v1, mask | 127, payload_len)
@@ -239,9 +280,9 @@ local function read_frame(self)
 end
 
 
-local function resolve_accept(self)
+local function resolve_accept(self, options)
     try_handle(self, "connect")
-    local code, err, url = read_handshake(self)
+    local code, err, url = read_handshake(self, options and options.upgrade)
     if code then
         local ok, s = httpd.write_response(self.write, code, err)
         if not ok then
@@ -255,6 +296,7 @@ local function resolve_accept(self)
     try_handle(self, "handshake", header, url)
     local recv_count = 0
     local recv_buf = {}
+    local first_op
     while true do
         if _isws_closed(self.id) then
             try_handle(self, "close")
@@ -280,11 +322,13 @@ local function resolve_accept(self)
                 if recv_count > MAX_FRAME_SIZE then
                     error("payload_len is too large")
                 end
+                first_op = first_op or op
                 if fin then
                     local s = table.concat(recv_buf)
-                    try_handle(self, "message", s, op)
+                    try_handle(self, "message", s, first_op)
                     recv_buf = {}  -- clear recv_buf
                     recv_count = 0
+                    first_op = nil
                 end
             end
         end
@@ -293,11 +337,10 @@ end
 
 
 local SSLCTX_CLIENT = nil
-local function _new_client_ws(socket_id, protocol)
+local function _new_client_ws(socket_id, protocol, hostname)
     local obj
     if protocol == "ws" then
         obj = {
-            websocket = true,
             close = function ()
                 socket.close(socket_id)
             end,
@@ -310,14 +353,13 @@ local function _new_client_ws(socket_id, protocol)
     elseif protocol == "wss" then
         local tls = require "http.tlshelper"
         SSLCTX_CLIENT = SSLCTX_CLIENT or tls.newctx()
-        local tls_ctx = tls.newtls("client", SSLCTX_CLIENT)
+        local tls_ctx = tls.newtls("client", SSLCTX_CLIENT, hostname)
         local init = tls.init_requestfunc(socket_id, tls_ctx)
         init()
         obj = {
-            websocket = true,
             close = function ()
                 socket.close(socket_id)
-                tls.closefunc(tls_ctx)() 
+                tls.closefunc(tls_ctx)()
             end,
             read = tls.readfunc(socket_id, tls_ctx),
             write = tls.writefunc(socket_id, tls_ctx),
@@ -363,7 +405,7 @@ local function _new_server_ws(socket_id, handle, protocol)
         obj = {
             close = function ()
                 socket.close(socket_id)
-                tls.closefunc(tls_ctx)() 
+                tls.closefunc(tls_ctx)()
             end,
             read = tls.readfunc(socket_id, tls_ctx),
             write = tls.writefunc(socket_id, tls_ctx),
@@ -384,8 +426,10 @@ end
 
 -- handle interface
 -- connect / handshake / message / ping / pong / close / error
-function M.accept(socket_id, handle, protocol, addr)
-    socket.start(socket_id)
+function M.accept(socket_id, handle, protocol, addr, options)
+    if not (options and options.upgrade) then
+        socket.start(socket_id)
+    end
     protocol = protocol or "ws"
     local ws_obj = _new_server_ws(socket_id, handle, protocol)
     ws_obj.addr = addr
@@ -396,7 +440,7 @@ function M.accept(socket_id, handle, protocol, addr)
         end)
     end
 
-    local ok, err = xpcall(resolve_accept, debug.traceback, ws_obj)
+    local ok, err = xpcall(resolve_accept, debug.traceback, ws_obj, options)
     local closed = _isws_closed(socket_id)
     if not closed then
         _close_websocket(ws_obj)
@@ -422,19 +466,28 @@ function M.connect(url, header, timeout)
     if protocol ~= "wss" and protocol ~= "ws" then
         error(string.format("invalid protocol: %s", protocol))
     end
-    
+
     assert(host)
-    local host_name, host_port = string.match(host, "^([^:]+):?(%d*)$")
-    assert(host_name and host_port)
+    local host_addr, host_port = string.match(host, "^([^:]+):?(%d*)$")
+    assert(host_addr and host_port)
     if host_port == "" then
         host_port = protocol == "ws" and 80 or 443
     end
+    local hostname
+    if not host_addr:match(".*%d+$") then
+        hostname = host_addr
+    end
 
     uri = uri == "" and "/" or uri
-    local socket_id = sockethelper.connect(host_name, host_port, timeout)
-    local ws_obj = _new_client_ws(socket_id, protocol)
+    local socket_id = sockethelper.connect(host_addr, host_port, timeout)
+    local ws_obj = _new_client_ws(socket_id, protocol, hostname)
     ws_obj.addr = host
-    write_handshake(ws_obj, host_name, uri, header)
+    
+    local is_ok,err = pcall(write_handshake, ws_obj, host_addr, uri, header)
+    if not is_ok then
+        _close_websocket(ws_obj)
+        error(err)
+    end
     return socket_id
 end
 
@@ -462,7 +515,6 @@ function M.read(id)
             end
         end
     end
-    assert(false)
 end
 
 
@@ -482,6 +534,11 @@ end
 function M.addrinfo(id)
     local ws_obj = assert(ws_pool[id])
     return ws_obj.addr
+end
+
+function M.real_ip(id)
+    local ws_obj = assert(ws_pool[id])
+    return ws_obj.real_ip
 end
 
 function M.close(id, code ,reason)
@@ -505,5 +562,6 @@ function M.close(id, code ,reason)
     end
 end
 
+M.is_close = _isws_closed
 
 return M

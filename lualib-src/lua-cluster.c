@@ -366,6 +366,8 @@ lunpackrequest(lua_State *L) {
 		msg = luaL_checklstring(L,1,&ssz);
 		sz = (int)ssz;
 	}
+	if (sz == 0)
+		return luaL_error(L, "Invalid req package. size == 0");
 	switch (msg[0]) {
 	case 0:
 		return unpackreq_number(L, (const uint8_t *)msg, sz);
@@ -601,6 +603,11 @@ lnodename(lua_State *L) {
 	pid_t pid = getpid();
 	char hostname[256];
 	if (gethostname(hostname, sizeof(hostname))==0) {
+		int i;
+		for (i=0; hostname[i]; i++) {
+			if (hostname[i] <= ' ')
+				hostname[i] = '_';
+		}
 		lua_pushfstring(L, "%s%d", hostname, (int)pid);
 	} else {
 		lua_pushfstring(L, "noname%d", (int)pid);

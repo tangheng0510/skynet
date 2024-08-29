@@ -14,6 +14,10 @@
 #define SOCKET_UDP 6
 #define SOCKET_WARNING 7
 
+// Only for internal use
+#define SOCKET_RST 8
+#define SOCKET_MORE 9
+
 struct socket_server;
 
 struct socket_message {
@@ -32,6 +36,7 @@ void socket_server_exit(struct socket_server *);
 void socket_server_close(struct socket_server *, uintptr_t opaque, int id);
 void socket_server_shutdown(struct socket_server *, uintptr_t opaque, int id);
 void socket_server_start(struct socket_server *, uintptr_t opaque, int id);
+void socket_server_pause(struct socket_server *, uintptr_t opaque, int id);
 
 // return -1 when error
 int socket_server_send(struct socket_server *, struct socket_sendbuffer *buffer);
@@ -52,6 +57,12 @@ struct socket_udp_address;
 int socket_server_udp(struct socket_server *, uintptr_t opaque, const char * addr, int port);
 // set default dest address, return 0 when success
 int socket_server_udp_connect(struct socket_server *, int id, const char * addr, int port);
+
+// create an udp client socket handle, and connect to server addr, return id when success
+int socket_server_udp_dial(struct socket_server *ss, uintptr_t opaque, const char* addr, int port);
+// create an udp server socket handle, and bind the host port, return id when success
+int socket_server_udp_listen(struct socket_server *ss, uintptr_t opaque, const char* addr, int port);
+
 // If the socket_udp_address is NULL, use last call socket_server_udp_connect address instead
 // You can also use socket_server_send 
 int socket_server_udp_send(struct socket_server *, const struct socket_udp_address *, struct socket_sendbuffer *buffer);

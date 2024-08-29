@@ -12,6 +12,9 @@ local CMD = setmetatable({}, { __gc = function() netpack.clear(queue) end })
 local nodelay = false
 
 local connection = {}
+-- true : connected
+-- nil : closed
+-- false : close read
 
 function gateserver.openclient(fd)
 	if connection[fd] then
@@ -21,8 +24,8 @@ end
 
 function gateserver.closeclient(fd)
 	local c = connection[fd]
-	if c then
-		connection[fd] = false
+	if c ~= nil then
+		connection[fd] = nil
 		socketdriver.close(fd)
 	end
 end
@@ -31,6 +34,8 @@ function gateserver.start(handler)
 	assert(handler.message)
 	assert(handler.connect)
 
+	local listen_context = {}
+
 	function CMD.open( source, conf )
 		assert(not socket)
 		local address = conf.address or "0.0.0.0"
@@ -38,7 +43,13 @@ function gateserver.start(handler)
 		maxclient = conf.maxclient or 1024
 		nodelay = conf.nodelay
 		skynet.error(string.format("Listen on %s:%d", address, port))
-		socket = socketdriver.listen(address, port)
+		socket = socketdriver.listen(address, port, conf.backlog)
+		listen_context.co = coroutine.running()
+		listen_context.fd = socket
+		skynet.wait(listen_context.co)
+		conf.address = listen_context.addr
+		conf.port = listen_context.port
+		listen_context = nil
 		socketdriver.start(socket)
 		if handler.open then
 			return handler.open(source, conf)
@@ -79,32 +90,27 @@ function gateserver.start(handler)
 	MSG.more = dispatch_queue
 
 	function MSG.open(fd, msg)
+		client_number = client_number + 1
 		if client_number >= maxclient then
-			socketdriver.close(fd)
+			socketdriver.shutdown(fd)
 			return
 		end
 		if nodelay then
 			socketdriver.nodelay(fd)
 		end
 		connection[fd] = true
-		client_number = client_number + 1
 		handler.connect(fd, msg)
-	end
-
-	local function close_fd(fd)
-		local c = connection[fd]
-		if c ~= nil then
-			connection[fd] = nil
-			client_number = client_number - 1
-		end
 	end
 
 	function MSG.close(fd)
 		if fd ~= socket then
+			client_number = client_number - 1
+			if connection[fd] then
+				connection[fd] = false	-- close read
+			end
 			if handler.disconnect then
 				handler.disconnect(fd)
 			end
-			close_fd(fd)
 		else
 			socket = nil
 		end
@@ -112,18 +118,31 @@ function gateserver.start(handler)
 
 	function MSG.error(fd, msg)
 		if fd == socket then
-			skynet.error("gateserver accpet error:",msg)
+			skynet.error("gateserver accept error:",msg)
 		else
+			socketdriver.shutdown(fd)
 			if handler.error then
 				handler.error(fd, msg)
 			end
-			close_fd(fd)
 		end
 	end
 
 	function MSG.warning(fd, size)
 		if handler.warning then
 			handler.warning(fd, size)
+		end
+	end
+
+	function MSG.init(id, addr, port)
+		if listen_context then
+			local co = listen_context.co
+			if co then
+				assert(id == listen_context.fd)
+				listen_context.addr = addr
+				listen_context.port = port
+				skynet.wakeup(co)
+				listen_context.co = nil
+			end
 		end
 	end
 
@@ -141,7 +160,7 @@ function gateserver.start(handler)
 		end
 	}
 
-	skynet.start(function()
+	local function init()
 		skynet.dispatch("lua", function (_, address, cmd, ...)
 			local f = CMD[cmd]
 			if f then
@@ -150,7 +169,13 @@ function gateserver.start(handler)
 				skynet.ret(skynet.pack(handler.command(cmd, address, ...)))
 			end
 		end)
-	end)
+	end
+
+	if handler.embed then
+		init()
+	else
+		skynet.start(init)
+	end
 end
 
 return gateserver
