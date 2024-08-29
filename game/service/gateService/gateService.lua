@@ -4,6 +4,34 @@ local socket = require "skynet.socket"
 local clients = {}
 local CMD = {}
 
+skynet.register_protocol {
+    name = "client",
+    id = skynet.PTYPE_CLIENT,   
+    unpack = skynet.tostring,   --- 将C point 转换为lua 二进制字符串
+}
+
+local function unpack_package(text)
+    local size = #text
+    if size < 2 then
+        return nil, text
+    end
+    local s = text:byte(1) * 256 + text:byte(2)
+    print("s:", s)
+    if size < s+2 then
+        return nil, text
+    end
+ 
+    return text:sub(3,2+s), text:sub(3+s)
+end
+
+local function decodeMsg(msg)
+    --- 前两个字节在netpack.filter 已经解析
+    print("msg size:", #msg)
+    local proto_name,stringbuffer = string.unpack(">s2s",msg)
+    -- local body = protobuf.decode(proto_name, stringbuffer)
+    return proto_name
+end
+
 local function connect(fd, addr)
 	--启用连接，开始等待接收客户端消息
 	print(fd .. " connected addr:" .. addr)
@@ -15,6 +43,10 @@ local function connect(fd, addr)
 		--正常接收
 		if readdata ~= nil then
 			print(fd .. " recv " .. readdata)
+            local data, last = unpack_package(readdata)
+            print(fd .. " proto_name " .. decodeMsg(data))
+
+            --socket.write(fd,readdata)
 		else 
 			print(fd .. " close ")
 			socket.close(fd)
