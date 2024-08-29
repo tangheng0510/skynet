@@ -1,0 +1,17 @@
+root = "./"
+
+-- 项目使用luaservice定义
+proj_luaservices =
+    root.."game/?.lua;" ..
+    root.."game/service/?/?.lua;" ..
+    root.."game/modules/?.lua;"..
+    root.."game/server/?.lua;"
+
+-- 项目使用lua_path定义
+proj_luapaths = proj_luaservices .. "./?.lua;" .. "" -- End
+
+luaservice = root.."service/?.lua;"..proj_luaservices
+lualoader = root .. "lualib/loader.lua"
+lua_path = root.."lualib/?.lua;"..root.."lualib/?/init.lua".. proj_luapaths
+lua_cpath = root .. "luaclib/?.so"
+snax = root.."examples/?.lua;"..root.."test/?.lua"
