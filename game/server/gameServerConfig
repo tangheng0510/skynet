@@ -1,3 +1,0 @@
-include "../config"
-
-start = "gameServer"	-- main script
